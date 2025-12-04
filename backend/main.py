@@ -3,7 +3,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List, Literal, Any, Dict
-from groq import Client
+from groq import Groq
 
 
 from dotenv import load_dotenv
@@ -54,7 +54,8 @@ GROQ_KEY = os.getenv("GROQ_API_KEY")
 if not GROQ_KEY:
     LOG.warning("Groq key missing, llm wont work :/")
 
-client = Client(api_key=GROQ_KEY)
+client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+
 
 SYSTEM_PROMPT = """
 You are a medical symptom analysis assistant.
