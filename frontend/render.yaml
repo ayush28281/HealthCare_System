@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: healthcare-backend
+    env: python
+    buildCommand: ""
+    startCommand: "./start.sh"
+    plan: free
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false
+      - key: MONGODB_URI
+        sync: false
