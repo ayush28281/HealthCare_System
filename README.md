@@ -3,8 +3,8 @@
  https://healthcare-system-1-ktsc.onrender.com
  
 ##  Live Demo Video
-
-[![Watch the video](https://raw.githubusercontent.com/ayush28281/HealthCare_System/main/videoThumb.png)](https://raw.githubusercontent.com/ayush28281/HealthCare_System/main/videoDemo.mp4)
+   Watch here: 
+[![Watch the video](https://youtu.be/TshX-xJBRBw)
 
 
 A full-stack **educational symptom analysis tool** built using:
