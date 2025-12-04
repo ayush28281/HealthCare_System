@@ -1,4 +1,6 @@
  Healthcare Symptom Checker (FastAPI + React + MongoDB + Groq)
+ ##  LIVE DEMO
+ https://healthcare-system-1-ktsc.onrender.com
 
 A full-stack **educational symptom analysis tool** built using:
 
