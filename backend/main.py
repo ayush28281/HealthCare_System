@@ -1,16 +1,19 @@
 # backend/main.py
+
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List, Literal, Any, Dict
-from groq import Groq
-
+from groq import Client  # ← IMPORTANT FIX
 
 from dotenv import load_dotenv
 from bson import ObjectId
-import os, json, datetime, logging
+import os
+import json
+import datetime
+import logging
 
-# optional MongoDB (motor might not exist sometimes)
+# Optional MongoDB
 try:
     from motor.motor_asyncio import AsyncIOMotorClient
 except:
@@ -23,13 +26,15 @@ app = FastAPI(title="Healthcare Symptom Checker API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # allow all, easier for dev
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ---- Data models (simple pydantic ones) ----
+
+# ---------------------------- Data Models ----------------------------
+
 class SymptomInput(BaseModel):
     symptoms: str
     age: Optional[int] = None
@@ -49,12 +54,13 @@ class SymptomAnalysis(BaseModel):
     disclaimer: str
 
 
-# ---- Groq LLM setup ----
+# ---------------------------- Groq Setup ----------------------------
+
 GROQ_KEY = os.getenv("GROQ_API_KEY")
 if not GROQ_KEY:
-    LOG.warning("Groq key missing, llm wont work :/")
+    LOG.warning("Groq key missing; LLM will not function.")
 
-client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+client = Client(api_key=GROQ_KEY)  # FIXED
 
 
 SYSTEM_PROMPT = """
@@ -74,11 +80,12 @@ Start with:
   "disclaimer": "string"
 }
 
-No markdown, no extra text, no diagnosis plz.
+No markdown, no extra text.
 """
 
 
-# ---- MongoDB setup ----
+# ---------------------------- MongoDB ----------------------------
+
 mongo_client = None
 collection = None
 
@@ -89,15 +96,14 @@ if MONGO_URI and AsyncIOMotorClient:
         mongo_client = AsyncIOMotorClient(MONGO_URI)
         db = mongo_client.get_default_database()
         collection = db.get_collection("history")
-        LOG.info("MongoDB connected ok.")
+        LOG.info("MongoDB connected.")
     except Exception as e:
         LOG.error(f"MongoDB connection failed: {e}")
         collection = None
 else:
-    LOG.warning("MongoDB not enabled.")
+    LOG.warning("MongoDB disabled.")
 
 
-# ---- small helper ----
 def normalize_probability(p: str) -> str:
     if not p:
         return "Low"
@@ -108,7 +114,6 @@ def normalize_probability(p: str) -> str:
 
 
 async def save_history(record: Dict[str, Any]):
-    """Just save one entry, simple helper (does nothing if db off)."""
     if collection is None:
         return None
     try:
@@ -116,17 +121,18 @@ async def save_history(record: Dict[str, Any]):
         res = await collection.insert_one(record)
         return str(res.inserted_id)
     except Exception as e:
-        LOG.exception("history save fail: %s", e)
+        LOG.exception("History save failed: %s", e)
         return None
 
 
-# ---- Main API endpoint ----
+# ---------------------------- Analyze API ----------------------------
+
 @app.post("/api/analyze", response_model=SymptomAnalysis)
 async def analyze_symptoms(input: SymptomInput):
     if not input.symptoms.strip():
         raise HTTPException(status_code=400, detail="Symptoms cannot be empty.")
 
-    user_message = (
+    user_msg = (
         f"Symptoms: {input.symptoms}\n"
         f"Age: {input.age}\n"
         f"Gender: {input.gender}\n"
@@ -138,86 +144,74 @@ async def analyze_symptoms(input: SymptomInput):
             model="llama-3.1-8b-instant",
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_message}
+                {"role": "user", "content": user_msg}
             ]
         )
         raw = response.choices[0].message.content
     except Exception as e:
-        LOG.error(f"LLM err: {e}")
-        raise HTTPException(status_code=500, detail="LLM request failed.")
+        LOG.error(f"LLM error: {e}")
+        raise HTTPException(status_code=500, detail="AI request failed.")
 
     try:
         data = json.loads(raw)
     except Exception:
-        LOG.error(f"Invalid JSON:\n{raw}")
+        LOG.error(f"Invalid JSON received:\n{raw}")
         raise HTTPException(status_code=500, detail="Bad JSON from AI.")
 
-    # basic safety cleanup
-    data["summary"] = data.get("summary") or \
-        "Based on these symptoms, here are possible conditions and next steps (educational only)."
-
-    conds = []
-    for c in data.get("conditions", []):
-        conds.append({
+    # cleanup
+    data["summary"] = data.get("summary") or "Based on these symptoms..."
+    data["conditions"] = [
+        {
             "name": c.get("name", "Unknown"),
             "probability": normalize_probability(c.get("probability")),
             "description": c.get("description", "")
-        })
-    data["conditions"] = conds
+        }
+        for c in data.get("conditions", [])
+    ]
 
-    recs = data.get("recommendations") or []
-    if not isinstance(recs, list):
-        recs = [str(recs)]
-    data["recommendations"] = recs
+    recs = data.get("recommendations", [])
+    data["recommendations"] = recs if isinstance(recs, list) else [str(recs)]
 
     urgency = str(data.get("urgency", "routine")).lower()
-    if urgency not in ("emergency", "urgent", "routine", "self-care"):
-        urgency = "routine"
-    data["urgency"] = urgency
+    data["urgency"] = urgency if urgency in ("emergency", "urgent", "routine", "self-care") else "routine"
 
-    data["disclaimer"] = data.get("disclaimer") or \
-        "This is educational info, not a diagnosis. Pls see a doctor if needed."
+    data["disclaimer"] = data.get("disclaimer") or "Educational only."
 
-    # store record (if db exists)
+    # store in DB
     await save_history({"input": input.dict(), "result": data})
 
     return SymptomAnalysis(**data)
 
 
-# ---- history list ----
+# ---------------------------- History APIs ----------------------------
+
 @app.get("/api/history")
 async def get_history(limit: int = Query(20, ge=1, le=100), skip: int = 0):
     if collection is None:
-        return {"count": 0, "items": [], "message": "MongoDB not configured."}
+        return {"count": 0, "items": [], "message": "MongoDB not active."}
 
     cursor = collection.find().sort("_created_at", -1).skip(skip).limit(limit)
-    out = []
+    items = []
+
     async for doc in cursor:
         doc["_id"] = str(doc["_id"])
         created = doc.get("_created_at")
         if created:
-            try:
-                doc["_created_at"] = created.isoformat() + "Z"
-            except:
-                doc["_created_at"] = str(created)
-        out.append(doc)
+            doc["_created_at"] = created.isoformat() + "Z"
+        items.append(doc)
 
     total = await collection.count_documents({})
-    return {"count": total, "items": out}
+    return {"count": total, "items": items}
 
 
-# ---- delete one ----
 @app.delete("/api/history/{item_id}")
 async def delete_history(item_id: str):
     if collection is None:
-        return {"deleted": False, "message": "MongoDB not configured"}
+        return {"deleted": False}
 
     try:
-        oid = ObjectId(item_id)
-        result = await collection.delete_one({"_id": oid})
-        if result.deleted_count == 1:
-            return {"deleted": True}
-        return {"deleted": False, "message": "Not found"}
+        result = await collection.delete_one({"_id": ObjectId(item_id)})
+        return {"deleted": result.deleted_count == 1}
     except Exception as e:
         return {"deleted": False, "error": str(e)}
 
